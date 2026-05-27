@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DDoS Attack Monitor - L7 & L4 Live Stats</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+
+        body {
+            font-family: 'Courier New', 'Fira Code', monospace;
+            background: #0a0a0a;
+            color: #00ff41;
+            height: 100vh;
+            overflow: hidden;
+            padding: 15px;
+        }
+
+        /* Layout utama - full screen tanpa scroll */
+        .dashboard {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            gap: 12px;
+        }
+
+        /* Header bar */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #00ff41;
+            flex-shrink: 0;
+        }
+
+        .title {
+            font-size: 20px;
+            font-weight: bold;
+            letter-spacing: 2px;
+        }
+
+        .title span {
+            color: #ff4444;
+        }
+
+        .uptime {
+            font-size: 12px;
+            color: #888;
+        }
+
+        /* Stats utama - 2 baris, langsung terlihat semua */
+        .stats-row {
+            display: flex;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+
+        .stat-card {
+            background: #0f0f0f;
+            border: 1px solid #00ff41;
+            border-radius: 6px;
+            padding: 12px 15px;
+            flex: 1;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            font-family: monospace;
+        }
+
+        .stat-label {
+            font-size: 10px;
+            color: #888;
+            margin-top: 5px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* Baris kedua stats */
+        .stats-row-2 {
+            display: flex;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+
+        /* Attack type indicators */
+        .attack-indicator {
+            display: flex;
+            gap: 20px;
+            background: #0f0f0f;
+            border: 1px solid #333;
+            border-radius: 6px;
+            padding: 10px 20px;
+            flex: 1;
+        }
+
+        .attack-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .badge-led {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .badge-led.active-l7 { background: #00ff41; box-shadow: 0 0 8px #00ff41; animation: blink 0.5s infinite; }
+        .badge-led.active-l4 { background: #ff4444; box-shadow: 0 0 8px #ff4444; animation: blink 0.3s infinite; }
+        .badge-led.idle { background: #333; }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* Main content - split L7 dan L4 */
+        .attacks-container {
+            display: flex;
+            gap: 12px;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .attack-panel {
+            flex: 1;
+            background: #0f0f0f;
+            border: 1px solid #333;
+            border-radius: 6px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .panel-header {
+            padding: 10px;
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+            font-weight: bold;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .panel-header i {
+            margin-right: 8px;
+        }
+
+        .l7-header { color: #00ff41; }
+        .l4-header { color: #ff4444; }
+
+        .attack-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+            font-size: 11px;
+        }
+
+        .attack-item {
+            padding: 6px 8px;
+            border-bottom: 1px solid #1a1a1a;
+            font-family: monospace;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .attack-item-l7 { border-left: 2px solid #00ff41; margin-bottom: 4px; }
+        .attack-item-l4 { border-left: 2px solid #ff4444; margin-bottom: 4px; }
+
+        .attack-ip {
+            color: #ffaa00;
+        }
+
+        .attack-path {
+            color: #888;
+            font-size: 10px;
+        }
+
+        .attack-time {
+            color: #555;
+            font-size: 10px;
+        }
+
+        /* Bottom status bar */
+        .footer {
+            display: flex;
+            justify-content: space-between;
+            padding-top: 8px;
+            border-top: 1px solid #333;
+            font-size: 10px;
+            color: #555;
+            flex-shrink: 0;
+        }
+
+        /* Scrollbar */
+        .attack-list::-webkit-scrollbar {
+            width: 4px;
+        }
+        .attack-list::-webkit-scrollbar-track {
+            background: #1a1a1a;
+        }
+        .attack-list::-webkit-scrollbar-thumb {
+            background: #00ff41;
+        }
+
+        /* Status bar */
+        .blink-text {
+            animation: blinkText 1s infinite;
+        }
+        @keyframes blinkText {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body>
+<div class="dashboard">
+    <!-- Header -->
+    <div class="header">
+        <div class="title">
+            DDoS<span>MON</span> :: L7/L4 ATTACK MONITOR
+        </div>
+        <div class="uptime" id="uptime">UPTIME: 0s</div>
+    </div>
+
+    <!-- Row 1 Stats -->
+    <div class="stats-row">
+        <div class="stat-card">
+            <div class="stat-value" id="totalAttacks">0</div>
+            <div class="stat-label">TOTAL ATTACKS</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="l7Count">0</div>
+            <div class="stat-label">L7 (HTTP FLOOD)</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="l4Count">0</div>
+            <div class="stat-label">L4 (TCP FLOOD)</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" id="rps">0</div>
+            <div class="stat-label">ATTACKS/SEC</div>
+        </div>
+    </div>
+
+    <!-- Row 2 Stats -->
+    <div class="stats-row-2">
+        <div class="attack-indicator">
+            <div class="attack-badge">
+                <div class="badge-led" id="l7Led"></div>
+                <span>L7 STATUS:</span>
+                <strong id="l7StatusText">IDLE</strong>
+            </div>
+            <div class="attack-badge">
+                <div class="badge-led" id="l4Led"></div>
+                <span>L4 STATUS:</span>
+                <strong id="l4StatusText">IDLE</strong>
+            </div>
+            <div class="attack-badge">
+                <span>🔥 PEAK RPS:</span>
+                <strong id="peakRps">0</strong>
+            </div>
+        </div>
+        <div class="stat-card" style="flex:0.5">
+            <div class="stat-value" id="uniqueIPs">0</div>
+            <div class="stat-label">UNIQUE IPs</div>
+        </div>
+        <div class="stat-card" style="flex:0.5">
+            <div class="stat-value" id="avgPayload">0</div>
+            <div class="stat-label">AVG PAYLOAD(KB)</div>
+        </div>
+    </div>
+
+    <!-- Main Attack Panels (L7 & L4 side by side) -->
+    <div class="attacks-container">
+        <!-- L7 Panel -->
+        <div class="attack-panel">
+            <div class="panel-header l7-header">
+                <i>🌐</i> L7 - HTTP/HTTPS FLOOD
+            </div>
+            <div class="attack-list" id="l7List">
+                <div style="color:#555; text-align:center; padding:20px;">Waiting for attacks...</div>
+            </div>
+        </div>
+
+        <!-- L4 Panel -->
+        <div class="attack-panel">
+            <div class="panel-header l4-header">
+                <i>⚡</i> L4 - TCP/SYN FLOOD
+            </div>
+            <div class="attack-list" id="l4List">
+                <div style="color:#555; text-align:center; padding:20px;">Waiting for attacks...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        <span>🛡️ REAL-TIME MONITOR</span>
+        <span id="lastAttack">LAST ATTACK: --</span>
+        <span>📡 MITIGATION: ACTIVE</span>
+    </div>
+</div>
+
+<script>
+    // ============ DATA STORE ============
+    let attacks = {
+        l7: [],
+        l4: []
+    };
+    
+    let attackTimestamps = [];
+    let uniqueIPs = new Map();
+    let peakRps = 0;
+    let startTime = Date.now();
+    let totalAttacks = 0;
+    let totalL7 = 0;
+    let totalL4 = 0;
+    let totalPayload = 0;
+    
+    // Fake IP pool untuk simulasi (karena di HTML static, attack datang dari console/tools eksternal)
+    let fakeAttackerIPs = [
+        '192.168.1.105', '10.0.0.23', '172.16.0.54', '103.75.0.12', '114.124.0.88',
+        '180.244.0.33', '36.69.0.99', '125.160.0.44', '139.0.0.77', '202.62.0.11'
+    ];
+    
+    // ============ UPDATE UI ============
+    function updateStats() {
+        const now = Date.now();
+        const rps = attackTimestamps.filter(t => now - t < 1000).length;
+        
+        if (rps > peakRps) peakRps = rps;
+        
+        document.getElementById('totalAttacks').innerText = totalAttacks.toLocaleString();
+        document.getElementById('l7Count').innerText = totalL7.toLocaleString();
+        document.getElementById('l4Count').innerText = totalL4.toLocaleString();
+        document.getElementById('rps').innerHTML = rps;
+        document.getElementById('peakRps').innerHTML = peakRps;
+        document.getElementById('uniqueIPs').innerText = uniqueIPs.size;
+        
+        const avgPayloadVal = totalAttacks > 0 ? (totalPayload / totalAttacks).toFixed(1) : 0;
+        document.getElementById('avgPayload').innerText = avgPayloadVal;
+        
+        // Update uptime
+        const uptimeSec = Math.floor((now - startTime) / 1000);
+        const hours = Math.floor(uptimeSec / 3600);
+        const minutes = Math.floor((uptimeSec % 3600) / 60);
+        const seconds = uptimeSec % 60;
+        document.getElementById('uptime').innerText = `UPTIME: ${hours}h ${minutes}m ${seconds}s`;
+        
+        // Update status LED berdasarkan aktivitas terbaru
+        const recentL7 = attacks.l7.some(a => now - a.timestamp < 2000);
+        const recentL4 = attacks.l4.some(a => now - a.timestamp < 2000);
+        
+        const l7Led = document.getElementById('l7Led');
+        const l4Led = document.getElementById('l4Led');
+        const l7StatusText = document.getElementById('l7StatusText');
+        const l4StatusText = document.getElementById('l4StatusText');
+        
+        if (recentL7) {
+            l7Led.className = 'badge-led active-l7';
+            l7StatusText.innerHTML = 'UNDER ATTACK!';
+            l7StatusText.style.color = '#00ff41';
+            l7StatusText.classList.add('blink-text');
+        } else {
+            l7Led.className = 'badge-led idle';
+            l7StatusText.innerHTML = 'IDLE';
+            l7StatusText.style.color = '#888';
+            l7StatusText.classList.remove('blink-text');
+        }
+        
+        if (recentL4) {
+            l4Led.className = 'badge-led active-l4';
+            l4StatusText.innerHTML = 'UNDER ATTACK!';
+            l4StatusText.style.color = '#ff4444';
+            l4StatusText.classList.add('blink-text');
+        } else {
+            l4Led.className = 'badge-led idle';
+            l4StatusText.innerHTML = 'IDLE';
+            l4StatusText.style.color = '#888';
+            l4StatusText.classList.remove('blink-text');
+        }
+    }
+    
+    // Render attack lists
+    function renderLists() {
+        const l7Container = document.getElementById('l7List');
+        const l4Container = document.getElementById('l4List');
+        
+        // Render L7 (20 terbaru)
+        if (attacks.l7.length === 0) {
+            l7Container.innerHTML = '<div style="color:#555; text-align:center; padding:20px;">No L7 attacks detected</div>';
+        } else {
+            l7Container.innerHTML = attacks.l7.slice(0, 30).map(a => `
+                <div class="attack-item attack-item-l7">
+                    <div>
+                        <span class="attack-ip">${a.ip}</span>
+                        <span class="attack-path"> ${a.method} ${a.path}</span>
+                    </div>
+                    <div class="attack-time">${a.timeAgo}</div>
+                </div>
+            `).join('');
+        }
+        
+        // Render L4 (20 terbaru)
+        if (attacks.l4.length === 0) {
+            l4Container.innerHTML = '<div style="color:#555; text-align:center; padding:20px;">No L4 attacks detected</div>';
+        } else {
+            l4Container.innerHTML = attacks.l4.slice(0, 30).map(a => `
+                <div class="attack-item attack-item-l4">
+                    <div>
+                        <span class="attack-ip">${a.ip}</span>
+                        <span class="attack-path"> ${a.protocol} → Port ${a.port}</span>
+                    </div>
+                    <div class="attack-time">${a.timeAgo}</div>
+                </div>
+            `).join('');
+        }
+    }
+    
+    // Format time ago
+    function getTimeAgo(timestamp) {
+        const diff = Date.now() - timestamp;
+        if (diff < 1000) return 'just now';
+        if (diff < 60000) return `${Math.floor(diff / 1000)}s ago`;
+        if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+        return `${Math.floor(diff / 3600000)}h ago`;
+    }
+    
+    // Update all time-ago texts
+    function updateTimeAgo() {
+        attacks.l7.forEach(a => { a.timeAgo = getTimeAgo(a.timestamp); });
+        attacks.l4.forEach(a => { a.timeAgo = getTimeAgo(a.timestamp); });
+        renderLists();
+    }
+    
+    // ============ RECORD ATTACK (PUBLIC API) ============
+    function recordAttack(type, data) {
+        const now = Date.now();
+        const ip = data.ip || fakeAttackerIPs[Math.floor(Math.random() * fakeAttackerIPs.length)];
+        const payloadSize = data.payloadSize || Math.floor(Math.random() * 50) + 1;
+        
+        // Update counters
+        totalAttacks++;
+        attackTimestamps.push(now);
+        if (attackTimestamps.length > 1000) attackTimestamps.shift();
+        
+        totalPayload += payloadSize;
+        
+        // Update unique IPs
+        let ipData = uniqueIPs.get(ip) || { count: 0, firstSeen: now };
+        ipData.count++;
+        uniqueIPs.set(ip, ipData);
+        
+        // Record berdasarkan type
+        if (type === 'L7') {
+            totalL7++;
+            attacks.l7.unshift({
+                timestamp: now,
+                timeAgo: 'just now',
+                ip: ip,
+                method: data.method || 'GET',
+                path: data.path || '/',
+                userAgent: data.userAgent || 'Unknown',
+                payloadSize: payloadSize
+            });
+            // Limit history
+            if (attacks.l7.length > 100) attacks.l7.pop();
+            
+        } else if (type === 'L4') {
+            totalL4++;
+            attacks.l4.unshift({
+                timestamp: now,
+                timeAgo: 'just now',
+                ip: ip,
+                protocol: data.protocol || 'TCP/SYN',
+                port: data.port || Math.floor(Math.random() * 10000) + 1024,
+                flags: data.flags || 'SYN'
+            });
+            if (attacks.l4.length > 100) attacks.l4.pop();
+        }
+        
+        // Update last attack time
+        document.getElementById('lastAttack').innerHTML = `LAST ATTACK: ${new Date().toLocaleTimeString()}`;
+        
+        // Update UI
+        updateStats();
+        renderLists();
+    }
+    
+    // ============ SIMULASI SERANGAN (UNTUK DEMO) ============
+    // Ini hanya untuk menunjukkan web bekerja. Attack juga bisa datang dari console/tools.
+    let demoInterval;
+    function startDemoAttacks() {
+        if (demoInterval) clearInterval(demoInterval);
+        
+        demoInterval = setInterval(() => {
+            // Random attack type: 70% L7, 30% L4
+            const isL7 = Math.random() > 0.3;
+            
+            if (isL7) {
+                const methods = ['GET', 'POST', 'GET', 'GET', 'DELETE'];
+                const paths = ['/', '/api/data', '/login', '/heavy', '/slow', '/api/users', '/admin', '/download'];
+                recordAttack('L7', {
+                    method: methods[Math.floor(Math.random() * methods.length)],
+                    path: paths[Math.floor(Math.random() * paths.length)],
+                    payloadSize: Math.floor(Math.random() * 100) + 1
+                });
+            } else {
+                const protocols = ['TCP/SYN', 'TCP/ACK', 'UDP/FLOOD', 'ICMP'];
+                recordAttack('L4', {
+                    protocol: protocols[Math.floor(Math.random() * protocols.length)],
+                    port: Math.floor(Math.random() * 65535) + 1,
+                    payloadSize: Math.floor(Math.random() * 60) + 1
+                });
+            }
+        }, 800); // 1 attack setiap 0.8 detik (demo)
+    }
+    
+    // ============ RESET FUNCTION ============
+    function resetMonitor() {
+        attacks = { l7: [], l4: [] };
+        attackTimestamps = [];
+        uniqueIPs.clear();
+        totalAttacks = 0;
+        totalL7 = 0;
+        totalL4 = 0;
+        totalPayload = 0;
+        peakRps = 0;
+        startTime = Date.now();
+        
+        updateStats();
+        renderLists();
+        document.getElementById('lastAttack').innerHTML = 'LAST ATTACK: --';
+        console.log('[MONITOR] Reset complete');
+    }
+    
+    // ============ EXPOSE KE CONSOLE UNTUK TESTING ============
+    window.ddosMonitor = {
+        recordL7: (ip, method, path) => recordAttack('L7', { ip: ip, method: method, path: path }),
+        recordL4: (ip, protocol, port) => recordAttack('L4', { ip: ip, protocol: protocol, port: port }),
+        stats: () => ({ total: totalAttacks, l7: totalL7, l4: totalL4, rps: attackTimestamps.filter(t => Date.now() - t < 1000).length, uniqueIPs: uniqueIPs.size }),
+        reset: resetMonitor,
+        simulateFlood: (count, type) => {
+            console.log(`[SIMULATE] Sending ${count} ${type} attacks...`);
+            for(let i = 0; i < count; i++) {
+                setTimeout(() => {
+                    if(type === 'L7' || (type !== 'L4' && Math.random() > 0.5)) {
+                        recordAttack('L7', { method: 'GET', path: '/', ip: `Flooder_${i}` });
+                    } else {
+                        recordAttack('L4', { protocol: 'TCP/SYN', port: 80, ip: `Flooder_${i}` });
+                    }
+                }, i * 10);
+            }
+        }
+    };
+    
+    // ============ INTERCEPT FETCH REQUEST (UNTUK MENANGKAP ATTACK DARI BROWSER) ============
+    const originalFetch = window.fetch;
+    window.fetch = function(...args) {
+        const url = args[0];
+        const options = args[1] || {};
+        const start = performance.now();
+        
+        // Catat sebagai L7 attack
+        if (typeof url === 'string' && url.includes(window.location.origin)) {
+            try {
+                const path = new URL(url, window.location.href).pathname;
+                setTimeout(() => {
+                    recordAttack('L7', {
+                        method: options.method || 'GET',
+                        path: path,
+                        ip: 'Browser-Request'
+                    });
+                }, 10);
+            } catch(e) {}
+        }
+        
+        return originalFetch.apply(this, args);
+    };
+    
+    // ============ INIT ============
+    console.log('%c═══════════════════════════════════════', 'color: #00ff41');
+    console.log('%c     DDoS ATTACK MONITOR - READY', 'color: #00ff41; font-size: 16px; font-weight: bold');
+    console.log('%c═══════════════════════════════════════', 'color: #00ff41');
+    console.log('%c📡 L7 & L4 Attack Monitor Aktif', 'color: #888');
+    console.log('%c💡 Command: ddosMonitor.stats() - Lihat statistik', 'color: #888');
+    console.log('%c💡 Command: ddosMonitor.simulateFlood(100, "L7") - Simulasi 100 attack L7', 'color: #888');
+    console.log('%c💡 Command: ddosMonitor.reset() - Reset semua data', 'color: #888');
+    console.log('%c═══════════════════════════════════════', 'color: #00ff41');
+    
+    // Start demo attacks
+    startDemoAttacks();
+    
+    // Update time ago setiap detik
+    setInterval(() => {
+        updateTimeAgo();
+        updateStats();
+    }, 1000);
+    
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+        if (demoInterval) clearInterval(demoInterval);
+    });
+</script>
+</body>
+</html>
